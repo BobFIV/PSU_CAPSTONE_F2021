@@ -1,0 +1,6 @@
+config LTE_POWER_SAVING_MODE
+	bool "Request Power Saving Mode (PSM) from cellular network"
+
+menu "Zephyr Kernel"
+source "Kconfig.zephyr"
+endmenu
