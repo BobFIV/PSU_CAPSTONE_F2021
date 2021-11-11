@@ -41,7 +41,7 @@ LOG_MODULE_REGISTER(net_http_client_sample, LOG_LEVEL_INF);
 //Port to connect to
 #define HTTPS_PORT 8080
 //HTTP server address to connect to
-#define SERVER_ADDR4  "3.231.72.34"
+#define SERVER_ADDR4  "REDEFINE_THIS"
 //Variable to set if using Soil Mositure Sensor
 #define SoilMoisture true
 //Variable to set if using Rainfall Trigger Sensor
