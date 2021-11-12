@@ -7,6 +7,7 @@
 # https://github.com/plotly/dash-sample-apps/tree/main/apps/dash-manufacture-spc-dashboard
 #
 #
+#
 
 import logging
 import dash
