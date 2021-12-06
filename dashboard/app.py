@@ -1,8 +1,14 @@
-#############################################
-# Team PJ3C Capstone Dashboard
+##########################################################################################
+# Dashboard Application
 # Author: Abdulrahman Alfares
 # Developed & Tested with Python v3.8.10
 #
+# Tab Switching callback logic obtained from:
+# https://github.com/plotly/dash-sample-apps/tree/main/apps/dash-manufacture-spc-dashboard
+#
+#
+#
+
 import logging
 import dash
 from dash import dcc
