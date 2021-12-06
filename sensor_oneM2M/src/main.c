@@ -9,6 +9,7 @@
 
 #include <string.h>
 #include <zephyr.h>
+#include <zephyr/types.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -19,6 +20,8 @@
 #include <modem/at_cmd.h>
 #include <modem/at_notif.h>
 #include <modem/modem_key_mgmt.h>
+#include <nrf_modem_at.h>
+#include <modem/at_monitor.h>
 #include <string.h>
 #include <logging/log.h>
 #include <net/net_ip.h>
@@ -37,11 +40,13 @@
 LOG_MODULE_REGISTER(net_http_client_sample, LOG_LEVEL_INF);
 
 
+
+
 /* HTTP and oneM2M settings */
 //Port to connect to
 #define HTTPS_PORT 8080
 //HTTP server address to connect to
-#define SERVER_ADDR4  "REDEFINE_THIS"
+#define SERVER_ADDR4  "REDEFINE"
 //Variable to set if using Soil Mositure Sensor
 #define SoilMoisture true
 //Variable to set if using Rainfall Trigger Sensor
@@ -51,9 +56,9 @@ LOG_MODULE_REGISTER(net_http_client_sample, LOG_LEVEL_INF);
 //CSE Name of the ACME in use
 #define cseName "cse-in"
 //Device name - change this if using with multiple devices running this code
-#define deviceName "Thingy91_JC"
+#define deviceName "sensor_JC"
 //originator - must be 'C'+deviceName by convention
-#define originator "CThingy91_JC"
+#define originator "Csensor_JC"
 /* end HTTP and oneM2M settings */
 
 /* Settings involving Sensors, Periods are in Seconds */
@@ -230,7 +235,7 @@ char *createACP(char *parentID, char *acpi)
 	printk("Creating ACP");
     struct sockaddr_in addr4;
     int sock4 = -1;
-    int32_t timeout = 5 * MSEC_PER_SEC;
+    int32_t timeout = 10 * MSEC_PER_SEC;
     int ret = 0;
     int port = HTTPS_PORT;
     char url[20];
@@ -273,6 +278,7 @@ char *createACP(char *parentID, char *acpi)
 
         printk("ACP create response:\n");
         ret = http_client_req(sock4, &req, timeout, "IPv4 POST");
+		printk("test %s\n", recv_buf_ipv4);
 		char *riString = "\"ri\":";
         substring = strstr(recv_buf_ipv4, riString);
         substring = strtok(substring, ",");
@@ -991,7 +997,6 @@ static void work_init(void)
 	k_work_init(&notify_pgps_work, notify_pgps);
 #endif
 }
-
 /* Function to initialize needed libraries and functionalities
 	including LTE, GPS, ADC, etc
  */ 
@@ -1055,7 +1060,6 @@ void main(void)
 		return;
 	}
 	printk("initialization successful\n");
-	k_work_submit(&gps_start_work); // start GPS
 	nrf_gpio_pin_pull_t res = NRF_GPIO_PIN_PULLDOWN; //Pulldown resistor to read Rainfall Trigger sensor correctly
 	//turn on green led
 	nrf_gpio_cfg_output(30);
@@ -1090,70 +1094,63 @@ void main(void)
 
 	temp = retrieveCNT("Temperature", originator);
 	char cntTemp[30];
+	char cntHum[30];
+	char cntGPS[30]; 
+	char cntMST[30]; 
+	char cntRTRG[30]; 
+	char cntInfo[30]; 
+	char cntBat[30];
+	char cntSig[30];
 	char acpString[20] = deviceName;
 	char acpiCNT[40];
 	char temp3[5] = "ACP";
 	strcat(acpString, temp3);
+
 	printk("\n comparing \"%s\" to empty \n", temp);
-	if (strcmp(temp, "") == 0) {
+	if (strcmp(temp, "") == 0) { //this means no CNTS created, create them all
 		char* temp4 = createACP(aeRI, acpString);
 		printk("acpi for CNT: %s\n", temp4);
 		strcpy(acpiCNT, temp4);
 		printk("acpi for CNT: %s\n", acpiCNT);
 		temp = createCNT("Temperature", aeRI, 10, acpiCNT);
 		strcpy(cntTemp, temp);
-	} else {
-		strcpy(cntTemp, temp);
-	}
-
-	char cntHum[30];
-	temp = retrieveCNT("Humidity", originator);
-	printk("\n comparing \"%s\" to empty \n", temp);
-	if (strcmp(temp, "") == 0) {
-		printk("%s", acpiCNT);
-		printk("aeRI %s acpiCNT %s", aeRI, acpiCNT);
 		temp = createCNT("Humidity", aeRI, 10, acpiCNT);
 		strcpy(cntHum, temp);
-	} else {
-		strcpy(cntHum, temp);
-	}
-
-	char cntGPS[30]; 
-	temp = retrieveCNT("GPS", originator);
-	printk("\n comparing \"%s\" to empty \n", temp);
-	if (strcmp(temp, "") == 0) {
-		printk("aeRI %s acpiCNT %s", aeRI, acpiCNT);
 		temp = createCNT("GPS", aeRI, 10, acpiCNT);
 		strcpy(cntGPS, temp);
-	} else {
-		strcpy(cntGPS, temp);
-	}
-
-	char cntMST[30]; 
-	if (SoilMoisture) {
-		temp = retrieveCNT("SoilMoisture", originator);
-		printk("\n comparing \"%s\" to empty \n", temp);
-		if (strcmp(temp, "") == 0) {
-			printk("aeRI %s acpiCNT %s", aeRI, acpiCNT);
+		if (SoilMoisture) {
 			temp = createCNT("SoilMoisture", aeRI, 10, acpiCNT);
 			strcpy(cntMST, temp);
-		} else {
-			strcpy(cntMST, temp);
 		}
-	}
-
-	char cntRTRG[30]; 
-	if (RainfallTrigger) {
-		temp = retrieveCNT("RainfallTrigger", originator);
-		printk("\n comparing \"%s\" to empty \n", temp);
-		if (strcmp(temp, "") == 0) {
-			printk("aeRI %s acpiCNT %s", aeRI, acpiCNT);
+		if (RainfallTrigger) {
 			temp = createCNT("RainfallTrigger", aeRI, 10, acpiCNT);
 			strcpy(cntRTRG, temp);
-		} else {
+		}
+		temp = createCNT("Info", aeRI, 10, acpiCNT);
+		strcpy(cntInfo, temp);
+		temp = createCNT("Battery", cntInfo, 10, acpiCNT);
+		strcpy(cntBat, temp);
+	} else {//retrieve all CNTs
+		strcpy(cntTemp, temp);
+		temp = retrieveCNT("Humidity", originator);
+		strcpy(cntHum, temp);
+		temp = retrieveCNT("GPS", originator);
+		strcpy(cntGPS, temp);
+		if (RainfallTrigger) {
+			temp = retrieveCNT("RainfallTrigger", originator);
 			strcpy(cntRTRG, temp);
 		}
+		if (SoilMoisture) {
+			temp = retrieveCNT("SoilMoisture", originator);
+			strcpy(cntMST, temp);
+		}
+		temp = retrieveCNT("Info", originator);
+		strcpy(cntInfo, temp);
+		temp = retrieveCNT("Battery", cntInfo);
+		strcpy(cntBat, temp);
 	}
+	
+	k_work_submit(&gps_start_work); // start GPS
 	/* Start sending sensor values, main loop of program 
 	   */
 	printk("\n\noneM2M initialization complete, sending sensor values \n\n");
@@ -1165,6 +1162,7 @@ void main(void)
 		}
 		char settings[9] = "Settings";
 		printk("Retrieving Settings CNT\n");
+		temp = retrieveCNT(settings, originator);
 		temp = retrieveCNT(settings, originator);
 		printk("\n comparing \"%s\" to empty \n", temp);
 		/* Get settings if they exist, otherwise upload and use the defaults */
@@ -1300,6 +1298,29 @@ void main(void)
 				}
 			}
 
+			int ret;
+			char battery[32] = {0};
+			char *bat;
+			ret = at_cmd_write("AT%XVBAT", battery, sizeof(battery), NULL);
+			if (ret != 0) {
+				printk("failed to read battery %d\n", ret);
+			} else {
+				bat = strstr(battery, " ");
+				bat++;
+				int batteryRaw = atoi(bat);
+				float batPercent = batteryRaw/4500.0*100;
+				printk("Battery Percentage: %f%%\n", batPercent);
+
+				char batString[12];
+				sprintf(batString, "%f", batPercent);
+				char batLabel[50] = deviceName;
+				strcat(batLabel, "/Info/Battery");
+				err = createCIN(cntBat, batString, batLabel);
+				if (err != 0) {
+					printk("error with Battery CIN: %d\n", err);
+					break; 
+				}
+			}
 			char GPSCoords[30];
 			sprintf(GPSCoords, "%f,%f", GPSLatitude, GPSLongitude);
 			char GPSlabel[50] = deviceName;
