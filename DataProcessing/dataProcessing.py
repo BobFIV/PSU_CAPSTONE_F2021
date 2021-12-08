@@ -6,11 +6,11 @@ from json import loads, dumps
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-appIP = "REDEFINE THIS"
+appIP = "100.26.30.1"
 appPort = 8000
 appName = "dataProcessing"
 dashHost = "localhost"
-cseIP = "REDEFINE THIS"
+cseIP = "3.231.72.34"
 csePort = "8080"
 cseID = "/id-in"
 cseName = "cse-in"
@@ -28,18 +28,6 @@ originator = 'C' + appName
 
 
 def calculateActuatorState(temp, hum, gps, soilMoisture, rainfallTrigger, maxThreshold=60.0):
-    # if rainfallTrigger == "ON":
-    #     return 0
-    # elif soilMoisture == "":  # substitute air humidity if not using soil moisture
-    #     if hum >= maxThreshold:
-    #         return 0
-    #     else:
-    #         return 1
-    # elif soilMoisture >= maxThreshold:
-    #     return 0
-    # else:
-    #     return 1
-
     latitude = gps[0]
     longitude = gps[1]
 
@@ -54,10 +42,10 @@ def calculateActuatorState(temp, hum, gps, soilMoisture, rainfallTrigger, maxThr
     else:
         pressure = ""
 
-    if temp < 4:  # in Fahrenheit or 4 in Celsius based on grass
+    if temp < 4:  # 4 in Celsius based on grass, too cold
         return 0
     # for humidity, for most mature plants is 50-60%
-    elif hum < 60:
+    elif hum > 60:
         return 0
     elif rainfallTrigger == 'ON':
         return 0
