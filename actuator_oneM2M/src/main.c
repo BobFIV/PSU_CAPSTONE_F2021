@@ -31,7 +31,7 @@ LOG_MODULE_REGISTER(net_http_client_sample, LOG_LEVEL_INF);
 // length of HTTP respones buffer
 #define MAX_RECV_BUF_LEN 1024
 // HTTP server address to connect to
-#define SERVER_ADDR4 "DEFINE THIS"
+#define SERVER_ADDR4 "3.231.72.34"
 // Variable to know if Thingy:91 is being used
 // Set to false if using the nrf9160dk
 #define Thingy91 true
@@ -40,10 +40,10 @@ LOG_MODULE_REGISTER(net_http_client_sample, LOG_LEVEL_INF);
 // CSE Name of the ACME in use
 #define cseName "cse-in"
 // Device name - change this if using with multiple devices running this code
-#define deviceName "ThingyAct_AR"
+#define deviceName "actuator_AR"
 // originator - should just be 'C'+deviceName by convention
-#define originator "CThingyAct_AR"
-// name of AE that has the information for AE input
+#define originator "Cactuator_AR"
+/* end HTTP and oneM2M settings */
 
 /* buffer to store HTTP request response in*/
 static uint8_t recv_buf_ipv4[1024];
@@ -455,7 +455,7 @@ char *createAE(char *resourceName, char *acpi)
 			"Content-Type: application/json;ty=2\r\n",
 			NULL};
 		char payload[225] = {0};
-		sprintf(payload, "{ \"m2m:ae\": {\"rr\": false, \"rn\": \"%s\", \"acpi\": [\"%s\"], \"api\": \"NR_AE001\", \"apn\": \"IOTApp\", \"lbl\": [ \"Thingy91\",\"actuator\" ], \"csz\": [\"application/json\"], \"srv\": [\"2a\"]} }", resourceName, acpi);
+		sprintf(payload, "{ \"m2m:ae\": {\"rr\": false, \"rn\": \"%s\", \"acpi\": [\"%s\"], \"api\": \"NR_AE001\", \"apn\": \"IOTApp\", \"lbl\": [ \"actuator\" ], \"csz\": [\"application/json\"], \"srv\": [\"2a\"]} }", resourceName, acpi);
 		printk("Application Entity Payload: %s\r\n", payload);
 		req.method = HTTP_POST;
 		req.url = "/cse-in";
@@ -733,7 +733,7 @@ char *createCNT(char *resourceName, char *parentID, int mni, char *acpi)
 	int ret = 0;
 	int port = HTTPS_PORT;
 	memset(recv_buf_ipv4, 0, sizeof(recv_buf_ipv4));
-	char url[20];
+	char url[30];
 	sprintf(url, "/%s", parentID);
 	char *substring = "";
 	if (IS_ENABLED(CONFIG_NET_IPV4))
@@ -859,6 +859,66 @@ static int init_app(void)
 	return 0;
 }
 
+int createstrCIN(char *parentID, char *content, char *label)
+{
+	printk("Sending CIN with parentID: %s\n", parentID);
+	struct sockaddr_in addr4;
+	int sock4 = -1;
+	int32_t timeout = 10 * MSEC_PER_SEC;
+	int ret = 0;
+	int port = HTTPS_PORT;
+	memset(recv_buf_ipv4, 0, sizeof(recv_buf_ipv4));
+	char url[40] = {0};
+	sprintf(url, "/%s", parentID);
+	printk("url created sucessfully\n");
+
+	if (IS_ENABLED(CONFIG_NET_IPV4))
+	{
+		(void)connect_socket(AF_INET, SERVER_ADDR4, port,
+							 &sock4, (struct sockaddr *)&addr4,
+							 sizeof(addr4));
+	}
+
+	if (sock4 >= 0 && IS_ENABLED(CONFIG_NET_IPV4))
+	{
+		struct http_request req;
+
+		memset(&req, 0, sizeof(req));
+		char origin[30];
+		sprintf(origin, "X-M2M-Origin: %s\r\n", originator);
+		const char *headers[] = {
+			"X-M2M-RI: sensorValue\r\n",
+			origin,
+			"X-M2M-RVI: 2a\r\n",
+			"Content-Type: application/json;ty=4\r\n",
+			NULL};
+		printk("Headers successfully created\n\n Content is %s with size %zu", content, sizeof(content));
+		char payload[180] = {0};
+		sprintf(payload, "{ \"m2m:cin\": {\"cnf\": \"application/text:0\", \"lbl\": [\"%s\"],\"con\": \"%s\"} }", label, content);
+		printk("Content Instance Payload: %s\r\n", payload);
+
+		req.method = HTTP_POST;
+		req.url = url;
+		req.host = SERVER_ADDR4;
+		req.protocol = "HTTP/1.1";
+		req.payload = payload;
+		req.payload_len = strlen(payload);
+		req.response = response_cb;
+		req.header_fields = headers;
+		req.recv_buf = recv_buf_ipv4;
+		req.recv_buf_len = sizeof(recv_buf_ipv4);
+
+		printk("CIN create response:\n");
+		ret = http_client_req(sock4, &req, timeout, "IPv4 POST");
+
+		close(sock4);
+	}
+	else
+	{
+		printk("Cannot open socket/send CIN command \r\n");
+	}
+	return 0;
+}
 /* creates a content instance for the AE, this is used to send sensor values to their respective containers
 	Assumes content is a double - as temp/hum sensors return doubles
  */
@@ -999,7 +1059,37 @@ char *retrieveCNT(char *resourceName, char *parentID)
 	}
 	return result;
 }
+void updateBatteryState(char *batCNT)
+{
+	int ret;
+	int err;
+	char battery[32] = {0};
+	char *bat;
+	ret = at_cmd_write("AT%XVBAT", battery, sizeof(battery), NULL);
+	if (ret != 0)
+	{
+		printk("failed to read battery %d\n", ret);
+	}
+	else
+	{
+		bat = strstr(battery, " ");
+		bat++;
+		int batteryRaw = atoi(bat);
+		float batPercent = batteryRaw / 4500.0 * 100;
+		printk("Battery Percentage: %f%%\n", batPercent);
 
+		char batString[12];
+		sprintf(batString, "%f", batPercent);
+		printk("%s", batString);
+		char batLabel[50] = deviceName;
+		strcat(batLabel, "/Info/Battery");
+		err = createstrCIN(batCNT, batString, batLabel);
+		if (err != 0)
+		{
+			printk("error with Battery CIN: %d\n", err);
+		}
+	}
+}
 void main(void)
 {
 	if (Thingy91)
@@ -1013,21 +1103,23 @@ void main(void)
 	}
 	printk("initialization successful\n");
 
-	int err = adp536x_init(ADP536X_I2C_DEV_NAME);
+	/*int err = adp536x_init(ADP536X_I2C_DEV_NAME);
 	if (err < 0)
 	{
 		printk("err: %d", err);
-	}
-	err = adp536x_buck_1v8_set();
-	k_sleep(K_MSEC(5000));
-	printk("successful adp536 initiation\n\n\n\n");
+	}*/
+	// err = adp536x_buck_1v8_set();
+	// k_sleep(K_MSEC(5000));
+	// printk("successful adp536 initiation\n\n\n\n");
 
-	/* Setting up the main application entity as well as containers for actuator values*/
-
+	/* Setting up the main application entity as well as containers for sensor values*/
+    printk("%s\n\n", deviceName);
 	char *temp = retrieveAE(deviceName);
 	char aeRI[20];
 	char acpi[40];
 	char lbl[40];
+	char cntInfo[30];
+	char cntBat[30];
 	printk("\n comparing \"%s\" to empty \n", temp);
 	if (strcmp(temp, "") == 0)
 	{
@@ -1049,15 +1141,15 @@ void main(void)
 		temp = createCNT("requestedState", aeRI, 1, acpiCNT);
 		temp = createSUB("requestedState", deviceName, 10);
 		temp = createPCH(deviceName);
-		int err;
-		char parentId[50];
-		strcpy(parentId, "/cse-in/");
-		strcat(parentId, deviceName);
-		strcat(parentId, "/");
-		strcat(parentId, "requestedState");
-		strcpy(lbl, deviceName);
-		strcat(lbl, "/requestedState");
-		err = createCIN(parentId, 0, lbl);
+		printk("here");
+		temp = createCNT("Info", aeRI, 10, acpiCNT);
+		printk("here");
+		strcpy(cntInfo, temp);
+		printk("%s", cntInfo);
+		temp = createCNT("Battery", cntInfo, 10, acpiCNT);
+		printk("here");
+		strcpy(cntBat, temp);
+		updateBatteryState(cntBat);
 	}
 	else
 	{
@@ -1067,41 +1159,47 @@ void main(void)
 	strcpy(lbl, deviceName);
 	strcat(lbl, "/actuatorState");
 	printk("%s", lbl);
-	err = 0;
+	int err = 0;
+	char actCNT[30];
+	temp = retrieveCNT("actuatorState", originator);
+	strcpy(actCNT, temp);
+	temp = retrieveCNT("Info", originator);
+	strcpy(cntInfo, temp);
+	temp = retrieveCNT("Battery", cntInfo);
+	strcpy(cntBat, temp);
+	printk("%s", actCNT);
+	printk("Battery: %s", cntBat);
+	err = createCIN(actCNT, 0, lbl);
+	// int pchInt = retrievePCH(deviceName);
+	// printk("retrievedVal = %d",pchInt);
 	while (true)
 	{
-		k_sleep(K_MSEC(2000));
 		printk("\n\n\n\nRetrieving CIN \n\n\n\n\n\n");
 		int testCalc = retrievePCH(deviceName);
 		printk("Returned testCalc: %d\n", testCalc);
-		char actCNT[30];
-		temp = retrieveCNT("actuatorState", originator);
-		strcpy(actCNT, temp);
-		printk("%s", actCNT);
+		// double Num2 = retrieveCIN("addNumInput", "Number2");
+		// printk("Returned Num2 for Addition: %f", Num2);
+		// Num1 += Num2;
+		// printk("Here");
+		// testCalc = testCalc / 10
 		int valveState = testCalc % 10;
 		printk("ValveState is: %d\n", valveState);
+		// testCalc = testCalc * 10;
+		// testCalc += valveState;
 		printk("New Actuator state is: %d\n", testCalc);
-		if (valveState >= 0)
-		{
-			err = createCIN(actCNT, valveState, lbl);
-			if (valveState == 1)
-			{
-				nrf_gpio_cfg_output(13);
-				nrf_gpio_pin_write(13, 1);
-			}
-			if (valveState == 0)
-			{
-				nrf_gpio_cfg_output(13);
-				nrf_gpio_pin_write(13, 0); 
-			}
-		}
 		if (valveState == 1)
 		{
+			nrf_gpio_cfg_output(13);
+			nrf_gpio_pin_write(13, 1); // sets Test Point 32 high as expected
 			err = createCIN(actCNT, valveState, lbl);
+			updateBatteryState(cntBat);
 		}
 		if (valveState == 0)
 		{
+			nrf_gpio_cfg_output(13);
+			nrf_gpio_pin_write(13, 0); // sets Test Point 32 high as expected
 			err = createCIN(actCNT, valveState, lbl);
+			updateBatteryState(cntBat);
 		}
 		if (valveState == -1)
 		{
@@ -1111,7 +1209,103 @@ void main(void)
 		{
 			printk("error with Temp CIN: %d", err);
 		}
-		int timeToWait = 1000;
-		k_sleep(K_MSEC(timeToWait));
+		/*
+			int ret;
+			char battery[32] = {0};
+			char *bat;
+			ret = at_cmd_write("AT%XVBAT", battery, sizeof(battery), NULL);
+			if (ret != 0) {
+				printk("failed to read battery %d\n", ret);
+			} else {
+				bat = strstr(battery, " ");
+				bat++;
+				int batteryRaw = atoi(bat);
+				float batPercent = batteryRaw/4500.0*100;
+				printk("Battery Percentage: %f%%\n", batPercent);
+
+				char batString[12];
+				sprintf(batString, "%f", batPercent);
+				char batLabel[50] = deviceName;
+				strcat(batLabel, "/Info/Battery");
+				err = createCIN(cntBat, batString, batLabel);
+				if (err != 0) {
+					printk("error with Battery CIN: %d\n", err);
+					break;
+				}
+			}
+		*/
+		// int timeToWait = retrieveCIN(deviceName, "waitPeriod");
 	}
+	// while (true)
+	//{
+	//	printk("All done");
+	//	k_sleep(K_MSEC(3000));
+	// }
+	//  retrieve the actuator input
+	//  through discovery function check for AE
+	//  if it exists we are good to discover CIN
+
+	// temp = retrieveCNT("Temperature");
+	// char cntTemp[30];
+	// char acpString[20] = deviceName;
+	// char acpiCNT[40];
+	// char temp3[5] = "ACP";
+	// strcat(acpString, temp3);
+
+	// if (strcmp(temp, "") == 0) {
+	// 	char* temp4 = createACP(aeRI, acpString);
+	// 	printk("acpi for CNT: %s\n", temp4);
+	// 	strcpy(acpiCNT, temp4);
+	// 	printk("acpi for CNT: %s\n", acpiCNT);
+	// 	temp = createCNT("Temperature", aeRI, 10, acpiCNT);
+	// 	strcpy(cntTemp, temp);
+	// } else {
+	// 	strcpy(cntTemp, temp);
+	// }
+	// char cntHum[30];
+	// temp = retrieveCNT("Humidity");
+	// if (strcmp(temp, "") == 0) {
+	// 	printk("%s", acpiCNT);
+	// 	printk("aeRI %s acpiCNT %s", aeRI, acpiCNT);
+	// 	temp = createCNT("Humidity", aeRI, 10, acpiCNT);
+	// 	strcpy(cntHum, temp);
+	// } else {
+	// 	strcpy(cntHum, temp);
+	// }
+
+	// char cntGPS[30];
+	// temp = retrieveCNT("GPS");
+	// if (strcmp(temp, "") == 0) {
+	// 	printk("aeRI %s acpiCNT %s", aeRI, acpiCNT);
+	// 	temp = createCNT("GPS", aeRI, 10, acpiCNT);
+	// 	strcpy(cntGPS, temp);
+	// } else {
+	// 	strcpy(cntGPS, temp);
+	// }
+
+	// /* Start sending temp/hum sensor values, main loop of program
+	//    */
+	// printk("\noneM2M initialization complete, sending sensor values \n\n");
+	// while (true) {
+	// 	/* This portion is sensor values, so only want to use this if Thingy:91 is in use */
+	// 	if (Thingy91) {
+	// 		double temp; double hum;
+	// 		environmental_data_get(&temp, &hum);
+	// 		printk("\ntemp: %lf hum %lf\n", temp, hum);
+	// 		int err;
+	// 		err = createCIN(cntTemp, temp);
+	// 		if (err != 0) {
+	// 			printk("error with Temp CIN: %d", err);
+	// 			break;
+	// 		}
+	// 		err = createCIN(cntHum, hum);
+	// 		if (err != 0) {
+	// 			printk("error with Hum CIN: %d", err);
+	// 			break;
+	// 		}
+	// 	}
+
+	// 	k_sleep(K_MSEC(5000));
+	// }
+	// printk("\nEND OF PROGRAM\n");
 }
