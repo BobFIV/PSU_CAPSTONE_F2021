@@ -6,7 +6,7 @@ from json import loads, dumps
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-appIP = "100.26.30.1"
+appIP = "DEFINE THIS"
 appPort = 8000
 appName = "dataProcessing"
 dashHost = "localhost"
