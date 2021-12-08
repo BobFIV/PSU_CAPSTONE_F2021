@@ -1022,7 +1022,7 @@ void main(void)
 	k_sleep(K_MSEC(5000));
 	printk("successful adp536 initiation\n\n\n\n");
 
-	/* Setting up the main application entity as well as containers for sensor values*/
+	/* Setting up the main application entity as well as containers for actuator values*/
 
 	char *temp = retrieveAE(deviceName);
 	char aeRI[20];
@@ -1068,27 +1068,18 @@ void main(void)
 	strcat(lbl, "/actuatorState");
 	printk("%s", lbl);
 	err = 0;
-	// int pchInt = retrievePCH(deviceName);
-	// printk("retrievedVal = %d",pchInt);
 	while (true)
 	{
 		k_sleep(K_MSEC(2000));
 		printk("\n\n\n\nRetrieving CIN \n\n\n\n\n\n");
 		int testCalc = retrievePCH(deviceName);
 		printk("Returned testCalc: %d\n", testCalc);
-		// double Num2 = retrieveCIN("addNumInput", "Number2");
-		// printk("Returned Num2 for Addition: %f", Num2);
-		// Num1 += Num2;
 		char actCNT[30];
 		temp = retrieveCNT("actuatorState", originator);
 		strcpy(actCNT, temp);
 		printk("%s", actCNT);
-		// printk("Here");
-		// testCalc = testCalc / 10
 		int valveState = testCalc % 10;
 		printk("ValveState is: %d\n", valveState);
-		// testCalc = testCalc * 10;
-		// testCalc += valveState;
 		printk("New Actuator state is: %d\n", testCalc);
 		if (valveState >= 0)
 		{
@@ -1096,26 +1087,20 @@ void main(void)
 			if (valveState == 1)
 			{
 				nrf_gpio_cfg_output(13);
-				nrf_gpio_pin_write(13, 1); // sets Test Point 32 high as expected
-										   // err = adp536x_buckbst_3v3_set();
+				nrf_gpio_pin_write(13, 1);
 			}
 			if (valveState == 0)
 			{
 				nrf_gpio_cfg_output(13);
-				nrf_gpio_pin_write(13, 0); // sets Test Point 32 high as expected
-										   // err = adp536x_buck_1v8_set();
+				nrf_gpio_pin_write(13, 0); 
 			}
 		}
 		if (valveState == 1)
 		{
-			// nrf_gpio_cfg_output(13);
-			// nrf_gpio_pin_write(13, 1); // sets Test Point 32 high as expected
 			err = createCIN(actCNT, valveState, lbl);
 		}
 		if (valveState == 0)
 		{
-			// nrf_gpio_cfg_output(13);
-			// nrf_gpio_pin_write(13, 0); // sets Test Point 32 high as expected
 			err = createCIN(actCNT, valveState, lbl);
 		}
 		if (valveState == -1)
@@ -1126,80 +1111,7 @@ void main(void)
 		{
 			printk("error with Temp CIN: %d", err);
 		}
-		// int timeToWait = retrieveCIN(deviceName, "waitPeriod");
 		int timeToWait = 1000;
 		k_sleep(K_MSEC(timeToWait));
 	}
-	// while (true)
-	//{
-	//	printk("All done");
-	//	k_sleep(K_MSEC(3000));
-	// }
-	//  retrieve the actuator input
-	//  through discovery function check for AE
-	//  if it exists we are good to discover CIN
-
-	// temp = retrieveCNT("Temperature");
-	// char cntTemp[30];
-	// char acpString[20] = deviceName;
-	// char acpiCNT[40];
-	// char temp3[5] = "ACP";
-	// strcat(acpString, temp3);
-
-	// if (strcmp(temp, "") == 0) {
-	// 	char* temp4 = createACP(aeRI, acpString);
-	// 	printk("acpi for CNT: %s\n", temp4);
-	// 	strcpy(acpiCNT, temp4);
-	// 	printk("acpi for CNT: %s\n", acpiCNT);
-	// 	temp = createCNT("Temperature", aeRI, 10, acpiCNT);
-	// 	strcpy(cntTemp, temp);
-	// } else {
-	// 	strcpy(cntTemp, temp);
-	// }
-	// char cntHum[30];
-	// temp = retrieveCNT("Humidity");
-	// if (strcmp(temp, "") == 0) {
-	// 	printk("%s", acpiCNT);
-	// 	printk("aeRI %s acpiCNT %s", aeRI, acpiCNT);
-	// 	temp = createCNT("Humidity", aeRI, 10, acpiCNT);
-	// 	strcpy(cntHum, temp);
-	// } else {
-	// 	strcpy(cntHum, temp);
-	// }
-
-	// char cntGPS[30];
-	// temp = retrieveCNT("GPS");
-	// if (strcmp(temp, "") == 0) {
-	// 	printk("aeRI %s acpiCNT %s", aeRI, acpiCNT);
-	// 	temp = createCNT("GPS", aeRI, 10, acpiCNT);
-	// 	strcpy(cntGPS, temp);
-	// } else {
-	// 	strcpy(cntGPS, temp);
-	// }
-
-	// /* Start sending temp/hum sensor values, main loop of program
-	//    */
-	// printk("\noneM2M initialization complete, sending sensor values \n\n");
-	// while (true) {
-	// 	/* This portion is sensor values, so only want to use this if Thingy:91 is in use */
-	// 	if (Thingy91) {
-	// 		double temp; double hum;
-	// 		environmental_data_get(&temp, &hum);
-	// 		printk("\ntemp: %lf hum %lf\n", temp, hum);
-	// 		int err;
-	// 		err = createCIN(cntTemp, temp);
-	// 		if (err != 0) {
-	// 			printk("error with Temp CIN: %d", err);
-	// 			break;
-	// 		}
-	// 		err = createCIN(cntHum, hum);
-	// 		if (err != 0) {
-	// 			printk("error with Hum CIN: %d", err);
-	// 			break;
-	// 		}
-	// 	}
-
-	// 	k_sleep(K_MSEC(5000));
-	// }
-	// printk("\nEND OF PROGRAM\n");
 }
