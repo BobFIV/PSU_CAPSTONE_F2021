@@ -31,7 +31,7 @@ LOG_MODULE_REGISTER(net_http_client_sample, LOG_LEVEL_INF);
 // length of HTTP respones buffer
 #define MAX_RECV_BUF_LEN 1024
 // HTTP server address to connect to
-#define SERVER_ADDR4 "3.231.72.34"
+#define SERVER_ADDR4 "DEFINE THIS"
 // Variable to know if Thingy:91 is being used
 // Set to false if using the nrf9160dk
 #define Thingy91 true
