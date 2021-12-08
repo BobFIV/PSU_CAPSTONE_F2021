@@ -35,4 +35,9 @@ Then the program enters a loop of:
    Reads latest GPS and Rainfall Trigger data
    Sends all of these values as CINs to the cloud CSE
    Time between transmissions to the cloud CSE is defined in Settings
+   
+Installation
+********
+See the Hackster article for detailed instructions on writing/programming the device and setting up the environment:
+https://www.hackster.io/psu-capstone-pj3c/cellular-iot-irrigation-system-for-onem2m-nordic-thingy-91-5cfc14
 
