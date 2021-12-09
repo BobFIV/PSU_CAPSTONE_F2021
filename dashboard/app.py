@@ -1,12 +1,11 @@
-##########################################################################################
-# Dashboard Application
+#############################################
+# Team PJ3C Capstone Dashboard
 # Author: Abdulrahman Alfares
 # Developed & Tested with Python v3.8.10
+# and ACME v0.9.1
 #
-# Tab Switching callback logic obtained from:
+# Inspired by the Dash Plotly example dashboard:
 # https://github.com/plotly/dash-sample-apps/tree/main/apps/dash-manufacture-spc-dashboard
-#
-#
 #
 
 import logging
@@ -19,12 +18,15 @@ import plotly.graph_objs as go
 import dash_daq as daq
 import plotly.express as px
 import pandas as pd
+import datetime as datetime
 import argparse
-from configparser import SafeConfigParser
+from configparser import ConfigParser
 import requests
 from json import loads, dumps
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
+import time
+from requests.api import request
 
 #### Read Config File ####
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -32,7 +34,7 @@ parser.add_argument("-c", "--config", type=str, default='device.cfg', help="Conf
 args = parser.parse_args()
 configFile = args.config
 
-parser = SafeConfigParser()
+parser = ConfigParser()
 parser.optionxform = str
 parser.read(configFile)
 appIP = parser.get('CONFIG_DATA', 'appIP')
@@ -46,26 +48,21 @@ cseName = parser.get('CONFIG_DATA', 'cseName')
 token = parser.get('CONFIG_DATA', 'mapboxToken')
 mapboxMapLink = parser.get('CONFIG_DATA', 'mapboxMapLink')
 
-# Initialize Variables
-newSensorBuffer = []
-rmSensorBuffer = []
-newActuatorBuffer = []
-rmActuatorBuffer = []
-newCINSensorBuffer = []
-newCINActuatorBuffer = []
-prevTempValue = None
-prevHumValue = None
-prevMoisValue = None
-prevGPSValue = None
-prevRainValue = None
-
-
 #### Dash App IP & Port ####
 ip = dashHost
 port = 8050
 
 ### AE-ID for this device ###
 originator = 'C'+appName
+
+
+# Hold sensor and actuator data 
+sensors = []
+actuators = []
+
+# Handle subs for sensors and actuators
+newSensorList = []
+newActuatorList = []
 
 #### Style, Color, and theme variable initialization ####
 alertStyle = {
@@ -95,17 +92,32 @@ alertStyle2 = {
   'margin-bottom': '2rem'
 }
 
-alertStyleHidden = {'color': 'white'}
-
 indicatorOffColor = '#1E2130'
 indicatorOnColor = '#91dfd2'
+
+alertStyleHidden = {'color': 'white'}
 
 darkTheme = {
     'dark': True,
     'primary': '#161a28',
     'secondary': 'white',
-    'detail': 'white'
+    'detail': 'white', 
 }
+
+darkThemeBar = {
+    'dark': True,
+    'primary': indicatorOnColor,
+    'secondary': 'black',
+    'detail': 'white', 
+    'margin-left': '2rem',
+    'margin-right': '2rem',
+    'margin-bottom': '3rem',
+    'width': '100%',
+    'justify-content': 'space-evenly'
+
+}
+
+barStyle = {'font-size': '1.6rem'}
 
 #### Setup App Metadata ####
 app = dash.Dash(
@@ -132,11 +144,11 @@ def generateMap(locList):
         lonC = -77.860001
         zoom = 13
     gpsLoc = pd.DataFrame(locList, columns =['lat', 'lon'])
-    mapFig = px.scatter_mapbox(gpsLoc, lat="lat", lon="lon", center={'lat': latC, 'lon': lonC}, zoom=zoom, height=620, size=[17])
+    mapFig = px.scatter_mapbox(gpsLoc, lat="lat", lon="lon", center={'lat': latC, 'lon': lonC}, zoom=zoom, height=400, size=[15], 
+    labels = {latC: "latitude", lonC: "longitude"})
     mapFig.update_layout(mapbox_style = mapboxMapLink, mapbox_accesstoken = token)
     mapFig.update_layout(margin={"r":0,"t":0,"l":0,"b":0})
     return mapFig
-
 
 def generateGraph(x, y):
     figure =  go.Figure(
@@ -159,20 +171,18 @@ def generateGraph(x, y):
             ),
         },
     })
-    figure.update_layout(height = 620, margin=dict(t=0,r=0,l=0,b=0,pad=0))
+    figure.update_layout(height = 400, margin=dict(t=0,r=0,l=0,b=0,pad=0))
     return figure
 
 #### Populate Dropdown List ####
 def build_dropdown(devType):
-    disAE = discover(type= "AE", label= devType)
-    ddList = []
-    devURI = []
-    for x in range(0, len(disAE)):
-        ddList.append(disAE[x].split("/")[-1])
-        devURI.append(disAE[x])
     options = []
-    for x in range(0, len(ddList)):
-        options.append({"label": ddList[x], "value": devURI[x]})
+    if (devType == "sensor"):
+        for sensor in sensors:
+            options.append({"label": sensor['rn'], "value": sensor['url']})
+    elif (devType == "actuator"):
+        for actuator in actuators:
+            options.append({"label": actuator['rn'], "value": actuator['url']})
     return options
 
 #### Generate Buttons ####
@@ -210,8 +220,18 @@ def build_banner():
                 id="banner-logo",
                 children=[
                     html.A(
-                        html.Img(id="logo2", src="https://www.pinclipart.com/picdir/big/144-1445924_penn-state-logo-clipart.png"),
-                        href = "https://www.engr.psu.edu/"
+                        id = "logo-container2",
+                        children = [
+                            html.Img(id="logo1", src="../assets/exacta_logo.jpg"),
+                        ],
+                        href = "http://www.exactagss.com/"
+                    ),
+                    html.A(
+                        id = "logo-container",
+                        children = [
+                            html.Img(id="logo2", src="../assets/psu_logo.png"),
+                        ],
+                        href = "https://www.lf.psu.edu/"
                     )
                 ],
             ),
@@ -273,65 +293,74 @@ def build_quick_stats_panel():
                     html.Span(id = 'alertboxS', hidden = True, children = [], style=alertStyleHidden)
                 ]
             ),
-            
             html.Div(
-                id = 'card-temp',  
-                children=[
-                    html.P("Temperature"),
-                    daq.Gauge(
-                        id = "temp-gauge",
-                        max = 45,
-                        min = -20,
-                        showCurrentValue = True,
-                        value = None,
-                        units = "C"
-                    )
-                ],
+                id = "side-buttons-container",
+                children = [
+                    html.Div(
+                        id = 'card-temp',  
+                        children=[
+                            html.P("Temperature"),
+                            daq.Gauge(
+                                id = "temp-gauge",
+                                max = 115,
+                                min = -5,
+                                showCurrentValue = False,
+                                value = None,
+                                units = "°F",
+                                size = 125
+                            )
+                        ],
+                    ),
+                    html.Div(
+                        id="card-hum",
+                        children=[
+                            html.P("Air Humidity"),
+                            daq.Gauge(
+                                id = "hum-gauge",
+                                max = 100,
+                                min = 0,
+                                showCurrentValue = False,
+                                value = None,
+                                units = "%",
+                                size = 125
+                            )
+                        ],
+                    ),
+                ]
             ),
             html.Div(
-                id="card-hum",
-                children=[
-                    html.P("Air Humidity"),
-                    daq.Gauge(
-                        id = "hum-gauge",
-                        max = 100,
-                        min = 0,
-                        showCurrentValue = True,
-                        value = None,
-                        units = "%"
-                    )
-                ],
+                id = "side-buttons-container",
+                children = [
+                    html.Div(
+                        id="card-mois",
+                        children=[
+                            html.P("Soil Moisture"),
+                            daq.Gauge(
+                                id = "mois-gauge",
+                                max = 100,
+                                min = 0,
+                                showCurrentValue = False,
+                                value = None,
+                                units = "%",
+                                size = 125
+                            )
+                        ],
+                    ),
+                    html.Div(
+                        id="card-rain",
+                        children=[
+                            html.P("Rainfall Indicator"),
+                            daq.Indicator(
+                                id = 'rainfallIndicator',
+                                value = False,
+                                label = '',
+                                labelPosition = 'bottom',
+                                color=indicatorOffColor,
+                            )
+                        ],
+                    ),
+                ]
             ),
-
-            html.Div(
-                id="card-mois",
-                children=[
-                    html.P("Soil Moisture"),
-                    daq.Gauge(
-                        id = "mois-gauge",
-                        max = 100,
-                        min = 0,
-                        showCurrentValue = True,
-                        value = None,
-                        units = "%"
-                    )
-                ],
-            ),
-
-            html.Div(
-                id="card-rain",
-                children=[
-                    html.P("Rainfall Indicator"),
-                    daq.Indicator(
-                        id = 'rainfallIndicator',
-                        value = False,
-                        label = '',
-                        labelPosition = 'bottom',
-                        color=indicatorOffColor,
-                    )
-                ],
-            ),
-            
         ],
     )
 
@@ -426,7 +455,7 @@ def build_control_side():
                 ], 
             ),
             html.Div(
-                id = "card-3",
+                id = "card-1",
                 children = [
                     html.P("Valve Control Device")
                 ]
@@ -444,28 +473,62 @@ def build_control_side():
             ),
             html.Div(
                 id = "side-buttons-container",
+                className = "specialContainer",
                 children = [
                     create_button("linkButton", "Link"),
                     create_button("unlinkButton", "Unlink")
                 ]
             ),
             html.Div(
-                className= 'alert', children = [
-                    html.Span(id = 'alertboxlink', className = "center", hidden = True, children = [], style=alertStyleHidden)
+                id = "card-1",
+                children = [
+                    html.P("Sensor Battery Level"),
+                    daq.DarkThemeProvider(
+                        theme = darkThemeBar, 
+                        children =[
+                            daq.GraduatedBar(
+                                id = "sBattery",
+                                value = None,
+                                showCurrentValue = False,
+                                max = 100,
+                                min = 0, 
+                                step = 2,
+                                label = {'label':'', 'style': barStyle},
+                                labelPosition = "bottom"
+                            ),  
+                        ]
+                    ),       
                 ]
             ),
             html.Div(
-                className= 'alert', children = [
-                    html.Span(id = 'alertboxunlink', className = "center", hidden = True, children = [], style=alertStyleHidden)
+                id = "card-2",
+                children = [
+                    html.P("Valve Control Battery Level"),
+                    daq.DarkThemeProvider(
+                        theme = darkThemeBar, 
+                        children =[
+                            daq.GraduatedBar(
+                                id = "aBattery",
+                                value = None,
+                                showCurrentValue = False,
+                                max = 100,
+                                min = 0, 
+                                step = 2,
+                                label = {'label':'', 'style': barStyle},
+                                labelPosition = "bottom"
+                            ),  
+                        ]
+                    ),   
                 ]
             ),
+            
         ]
     )
 
 # Settings Column
 def build_settings_column(id, cardID, title, max = None, min = None):
     if (id == "transmitP"):
-        default = 5
+        default = 10
     else:
         default = 1
     if (max == None):
@@ -497,7 +560,7 @@ def build_settings_panel_left():
     return html.Div(
         id = "settings-col",
         children=[
-            build_settings_column("numAvg", "card-1", "Sensor values to average", min = 1, max = 100),
+            build_settings_column("numAvg", "card-5", "Sensor values to average", min = 1, max = 100),
             build_settings_column("transmitP", "card-2", "Transmit time (s)"),
         ]
     )
@@ -520,6 +583,7 @@ def build_settings_panel_right():
 # Top panel 
 def build_control_top():
     return html.Div(
+        id="control-container-big",
         children = [
             generate_section_banner("Sensor Settings"),
             html.Div(
@@ -631,7 +695,7 @@ def build_control_bottom():
             generate_section_banner("Manual Valve Controls"),
             html.Div(
                 id="bottom-section-container-control",
-                className="twelve columns",
+                className="row",
                 children=[
                     html.Div(
                         id="metric-summary-session",
@@ -708,269 +772,137 @@ def render_tab_content(tab_switch):
     Output('ddMenuS', 'options'),
     [Input('clkDevS', 'n_intervals')],
     [Input('ddMenuS', 'options')],
+    prevent_initial_call = True
 )   
 def updateSensorList(n, ddMenu):
-    trigger = dash.callback_context
-    triggerID = trigger.triggered[0]['prop_id'].split('.')[0]
-    if triggerID == 'clkDevS':
-        global newSensorBuffer
-        global rmSensorBuffer
-
-        if (newSensorBuffer == []) and (rmSensorBuffer == []):
-            return dash.no_update
-    
-        newDevices = []
-        newDevRn = []
-        rmDevices = []
-        rmDevRn = []
-
-        for device in newSensorBuffer:
-            option = {"label": device, "value": "cse-in/" + device}
-            if (option not in ddMenu) and (device not in rmSensorBuffer):
-                newDevices.append(option)
-                newDevRn.append(device)
-                newSensorBuffer.remove(device)
-
-        for device in rmSensorBuffer:
-            option = {"label": device, "value": "cse-in/" + device}
-            if (option in ddMenu) and (device not in newDevices):
-                rmDevices.append(option)
-                rmDevRn.append(device)
-                rmSensorBuffer.remove(device)
+    global sensors
+    newOptions = []
+    for sensor in sensors:
+        newOptions.append(sensor['url'])
         
-        if (newDevices == []) and (rmDevices == []):
-            return dash.no_update
-
-        for option in ddMenu:
-            if option not in rmDevices:
-                newDevices.append(option)
+    oldOptions = []
+    for sensor in ddMenu:
+        oldOptions.append(sensor['value'])
         
-        return newDevices
+    newOptions.sort()
+    oldOptions.sort()
+
+    if (newOptions != oldOptions):
+        options = []
+        for sensor in sensors:
+            options.append({'label': sensor['rn'], 'value': sensor['url']})
+        return options
     return dash.no_update
 
 #### Temperature Values and Graph Updates ####
 @app.callback(
     Output('temp-gauge', 'value'),
+    Output('temp-gauge', 'max'),
+    Output('temp-gauge', 'min'),
+    Output('temp-gauge', 'showCurrentValue'),
     Output('temp-graph', 'figure'),
     [Input('ddMenuS', 'value')],
     [Input('clkVal', 'n_intervals')],
     [Input('temp-graph', 'figure')],
+    [Input('temp-gauge', 'max')],
+    [Input('temp-gauge', 'min')],
+    prevent_initial_call = True
 )
-def showTempVal(value, n, figure):
-    
-    global prevTempValue
-
-    if ((value is not None)):
-        
-        discoverySUB = discover(type="Sub", location=value + "/Temperature", rn="tempSub")
-
-        if (discoverySUB != []) and (figure['data'][0]['x'] != []) and (figure['data'][0]['y'] != []) and (prevTempValue == value): #and (figure['data'][0]['x'] != []) and (figure['data'][0]['y'] != []) 
-            latestDate = max(figure['data'][0]['x'])
-            tempDates = []
-            tempVals = []
-            global newCINSensorBuffer
-            for item in newCINSensorBuffer:
-                if (item[0] == value + "/Temperature"):
-                    tempDate = item[2]
-                    if (item[1] != "") and (tempDate > latestDate):
-                        tempVals.append(float(item[1]))
-                        tempDates.append(tempDate[0:4] + "-" + tempDate[4:6] + "-" + tempDate[6:11] + ":" + tempDate[11:13] + ":" + tempDate[13:15])
-                    newCINSensorBuffer.remove(item)
-            
-            if (tempVals != []) and (tempDates != []):
-                newestTemp = tempVals[tempDates.index(max(tempDates))]
-                figure['data'][0]['x'].extend(tempDates)
-                figure['data'][0]['y'].extend(tempVals)
-                prevTempValue = value
-                return newestTemp, figure
-            prevTempValue = value
-            return dash.no_update, dash.no_update
-        if ((figure['data'][0]['x'] == []) and (figure['data'][0]['y'] == [])) or (prevTempValue != value):
-            
-            discoveryCNT = discover(type="Container", location=value, rn="Temperature")
-            if (discoveryCNT != []):
-                if discoverySUB == []:
-                    subRI = createSubscription("tempSub", value + "/Temperature", [3])
-
-                tempVals, tempDates = requestAllCIN(value + "/Temperature")
-                if (tempVals != []) and (tempDates != []):   
-                    newestTemp = tempVals[tempDates.index(max(tempDates))]
-
-                    figure['data'][0]['x'] = tempDates
-                    figure['data'][0]['y'] = tempVals
-                    prevTempValue = value
-                    return newestTemp, figure 
-    prevTempValue = value
-    return None, generateGraph([], [])
-
+def showTempVal(value, n, figure, maxVal, minVal):
+    if (value is not None):
+        oldDates = figure['data'][0]['x']
+        values, dates = getAllData(value, "Temperature")
+        if (dates == []):
+            return None, 115, -5, False, generateGraph([], [])
+        latestVal = values[dates.index(max(dates))]  
+        if (latestVal > 115):
+            maxVal = int(latestVal) + 5
+            minVal = -5
+        elif (latestVal < -5):
+            maxVal = 115
+            minVal = int(latestVal) - 5
+        elif (maxVal != 115) or (minVal != -5):
+            maxVal = 115
+            minVal = -5
+        if (oldDates == []):
+            return latestVal, maxVal, minVal, True, generateGraph(dates, values)
+        elif (oldDates[-1] != dates[-1]):
+            return latestVal, maxVal, minVal, True, generateGraph(dates, values)
+        return dash.no_update, maxVal, minVal, True, dash.no_update
+    if (maxVal != 115) or (minVal != -5):
+        return None, 115, -5, False, generateGraph([], [])
+    return None, dash.no_update, dash.no_update, False, generateGraph([], [])
 
 #### Soil Moisture Values and Graph Updates ####
 @app.callback(
     Output('mois-gauge', 'value'),
+    Output('mois-gauge', 'showCurrentValue'),
     Output('mois-graph', 'figure'),
     [Input('ddMenuS', 'value')],
     [Input('clkVal', 'n_intervals')],
     [Input('mois-graph', 'figure')],
-
+    prevent_initial_call = True
 )
 def showMoisVal(value, n, figure):
-    global prevMoisValue
-    if ((value is not None)):
-
-        discoverySUB = discover(type="Sub", location=value + "/SoilMoisture", rn="moisSub")
-        
-        if (discoverySUB != [])  and (figure['data'][0]['x'] != []) and (figure['data'][0]['y'] != []) and (prevMoisValue == value): #  and (figure['data'][0]['x'] != []) and (figure['data'][0]['y'] != [])
-            latestDate = max(figure['data'][0]['x'])
-            dates = []
-            vals = []
-            global newCINSensorBuffer
-            for item in newCINSensorBuffer:
-                if (item[0] == value + "/SoilMoisture"):
-                    date = item[2]
-                    if (item[1] != "") and (date > latestDate):
-                        vals.append(float(item[1]))
-                        dates.append(date[0:4] + "-" + date[4:6] + "-" + date[6:11] + ":" + date[11:13] + ":" + date[13:15])
-                    newCINSensorBuffer.remove(item)
-            if (vals != []) and (dates != []):
-                newestVal = vals[dates.index(max(dates))]
-                figure['data'][0]['x'].extend(dates)
-                figure['data'][0]['y'].extend(vals)
-                prevMoisValue = value
-                return newestVal, figure
-            prevTempValue = value
-            return dash.no_update, dash.no_update
-        if  ((figure['data'][0]['x'] == []) and (figure['data'][0]['y'] == [])) or (prevMoisValue != value):
-            
-            
-            discoveryCNT = discover(type="Container", location=value, rn="SoilMoisture")
-            if (discoveryCNT != []):
-                if discoverySUB == []:
-                    subRI = createSubscription("moisSub", value + "/SoilMoisture", [3])
-
-                vals, dates = requestAllCIN(value + "/SoilMoisture")
-                if (vals != []) and (dates != []):          
-                    newestVal = vals[dates.index(max(dates))]
-
-                    figure['data'][0]['x']=dates
-                    figure['data'][0]['y']=vals
-                    prevMoisValue = value
-                    return newestVal, figure 
-    prevMoisValue = value
-    return None, generateGraph([], [])
-
+    if (value is not None):
+        oldDates = figure['data'][0]['x']
+        values, dates = getAllData(value, "SoilMoisture")
+        if (dates == []):
+            return None, False, generateGraph([], [])    
+        elif (oldDates == []):
+            latestVal = values[dates.index(max(dates))]
+            return latestVal, True, generateGraph(dates, values)
+        elif (oldDates[-1] != dates[-1]):
+            latestVal = values[dates.index(max(dates))]
+            return latestVal, True, generateGraph(dates, values)
+        return dash.no_update, True, dash.no_update
+    return None, False, generateGraph([], [])
 
 #### Humidity Values and Graph Updates ####
 @app.callback(
     Output('hum-gauge', 'value'),
+    Output('hum-gauge', 'showCurrentValue'),
     Output('hum-graph', 'figure'),
     [Input('ddMenuS', 'value')],
     [Input('clkVal', 'n_intervals')],
     [Input('hum-graph', 'figure')],
+    prevent_initial_call = True
 )
 def showHumVal(value, n, figure):
-    global prevHumValue
-    
-    if ((value is not None)):
-
-        discoverySUB = discover(type="Sub", location=value + "/Humidity", rn="humSub")
-
-        if (discoverySUB != []) and (figure['data'][0]['x'] != []) and (figure['data'][0]['y'] != []) and (prevHumValue == value): #and (figure['data'][0]['x'] != []) and (figure['data'][0]['y'] != [])
-            
-            latestDate = max(figure['data'][0]['x'])
-            dates = []
-            vals = []
-            global newCINSensorBuffer
-            for item in newCINSensorBuffer:
-                if (item[0] == value + "/Humidity"):
-                    date = item[2]
-                    if (item[1] != "") and (date > latestDate):
-                        vals.append(float(item[1]))
-                        dates.append(date[0:4] + "-" + date[4:6] + "-" + date[6:11] + ":" + date[11:13] + ":" + date[13:15])
-                    newCINSensorBuffer.remove(item)
-            
-            if (vals != []) and (dates != []):
-                newestVal = vals[dates.index(max(dates))]
-                figure['data'][0]['x'].extend(dates)
-                figure['data'][0]['y'].extend(vals)
-                prevHumValue = value
-                return newestVal, figure
-            prevHumValue = value
-            return dash.no_update, dash.no_update
-        if ((figure['data'][0]['x'] == []) and (figure['data'][0]['y'] == [])) or (prevHumValue != value):
-            
-            discoveryCNT = discover(type="Container", location=value, rn="Humidity")
-            
-            if discoveryCNT != []:
-                if (discoverySUB == []):
-                    subRI = createSubscription("humSub", value + "/Humidity", [3])
-                
-                vals, dates = requestAllCIN(value + "/Humidity")
-                if (vals != []) and (dates != []):        
-                    newestVal = vals[dates.index(max(dates))]
-
-                    figure['data'][0]['x']=dates
-                    figure['data'][0]['y']=vals
-                    prevHumValue = value
-                    return newestVal, figure 
-    prevHumValue = value
-    return None, generateGraph([], [])
+    if (value is not None):
+        oldDates = figure['data'][0]['x']
+        values, dates = getAllData(value, "Humidity")
+        if (dates == []):
+            return None, False, generateGraph([], [])    
+        elif (oldDates == []):
+            latestVal = values[dates.index(max(dates))]
+            return latestVal, True, generateGraph(dates, values)
+        elif (oldDates[-1] != dates[-1]):
+            latestVal = values[dates.index(max(dates))]
+            return latestVal, True, generateGraph(dates, values)
+        return dash.no_update, True, dash.no_update
+    return None, False, generateGraph([], [])
 
 #### GPS Location Update ####
 @app.callback(
     Output('control-chart-live', 'figure'),
     [Input('ddMenuS', 'value')],
     [Input('clkVal', 'n_intervals')],
-    [Input('control-chart-live', 'figure')]
+    [Input('control-chart-live', 'figure')],
+    prevent_initial_call = True
 )
 def showGPSLoc(value, n, figure):
-    global prevGPSValue
-    if ((n>0) and (value is not None)):
-
-        discoverySUB = discover(type="Sub", location=value + "/GPS", rn="gpsSub")
-        if (discoverySUB != []) and ((figure['data'][0]['lat'] != [0]) or (figure['data'][0]['lon'] != [0])) and (prevGPSValue == value): #and ((figure['data'][0]['lat'] != [0]) or (figure['data'][0]['lon'] != [0])) 
-            
-            dates = []
-            vals = []
-            global newCINSensorBuffer
-            for item in newCINSensorBuffer:
-                if (item[0] == value + "/GPS"):
-                    date = item[2]
-                    if (item[1] != ""):
-                        vals.append(item[1])
-                        dates.append(date[0:4] + "-" + date[4:6] + "-" + date[6:11] + ":" + date[11:13] + ":" + date[13:15])
-                    newCINSensorBuffer.remove(item)
-            
-            if (vals != []) and (dates != []):
-                newestVal = vals[dates.index(max(dates))]
-                if (newestVal == ""):
-                    prevGPSValue = value
-                    return generateMap([[0,0]])
-                gpsLoc = newestVal.split(",")
-                gpsLoc[0] = float(gpsLoc[0])
-                gpsLoc[1] = float(gpsLoc[1])
-                prevGPSValue = value
-                return generateMap([gpsLoc])
-            prevGPSValue = value
+    if (value is not None):
+        latestVal = getLatestData(value, "GPS")
+        if latestVal == "":
+            return generateMap([[0, 0]])
+        gpsLoc = latestVal.split(",")
+        gpsLoc[0] = float(gpsLoc[0])
+        gpsLoc[1] = float(gpsLoc[1])
+        oldLoc = [float(figure['data'][0]['lat'][0]), float(figure['data'][0]['lon'][0])]
+        if (oldLoc[0] == gpsLoc[0]) and (oldLoc[1] == gpsLoc[1]):
             return dash.no_update
-        if (figure['data'][0]['lat'] == [0]) and (figure['data'][0]['lon'] == [0]) or (prevGPSValue != value):
-            
-            discoveryCNT = discover(type="Container", location=value, rn="GPS")
-            if (discoveryCNT != []):
-                if discoverySUB == []:
-                    subRI = createSubscription("gpsSub", value + "/GPS", [3])
-
-                gpsVal, gpsDate = requestVal(value + '/GPS/la')
-
-                if (gpsVal == ""):
-                    prevGPSValue = value
-                    return generateMap([[0,0]])
-                
-                gpsLoc = gpsVal.split(",")
-                gpsLoc[0] = float(gpsLoc[0])
-                gpsLoc[1] = float(gpsLoc[1])
-                prevGPSValue = value
-                return generateMap([gpsLoc])
-    prevGPSValue = value
+        return generateMap([gpsLoc])
     return generateMap([[0,0]])
 
 #### Rainfall Trigger Update ####
@@ -980,52 +912,25 @@ def showGPSLoc(value, n, figure):
     Output('rainfallIndicator', 'color'),
     [Input('ddMenuS', 'value')],
     [Input('clkVal', 'n_intervals')],
-    [Input('rainfallIndicator', 'value')],
-    
+    [Input('rainfallIndicator', 'label')],
+    prevent_initial_call = True
 )
-def showRainIndicator(value, n, indicator):
-    global prevRainValue
-    if ((value is not None)):
-
-        discovery = discover(type="Sub", location=value + "/RainfallTrigger", rn="rainSub")
-
-        if (discovery != []) and (indicator != False) and (prevRainValue == value):
-            dates = []
-            vals = []
-            global newCINSensorBuffer
-            for item in newCINSensorBuffer:
-                if (item[0] == value + "/RainfallTrigger"):
-                    date = item[2]
-                    if (item[1] != ""):
-                        vals.append(item[1])
-                        dates.append(date[0:4] + "-" + date[4:6] + "-" + date[6:11] + ":" + date[11:13] + ":" + date[13:15])
-                    newCINSensorBuffer.remove(item)
-            prevRainValue = value
-            if (vals != []) and (dates != []):
-                newestVal = vals[dates.index(max(dates))]
-                if (newestVal == "OFF") or (newestVal == "off"):
-                    return True, 'OFF', indicatorOffColor
-                elif (newestVal == "ON") or (newestVal == "on"):
-                    return True, 'ON', indicatorOnColor
-                else:
-                    return False, '', indicatorOffColor
-
-            return dash.no_update, dash.no_update, dash.no_update
-        if (discovery == []):
-            discovery = discover(type="Container", location=value, rn="RainfallTrigger")
-
-            if discovery != []:
-                subRI = createSubscription("rainSub", value + "/RainfallTrigger", [3])
-
-        val, date = requestVal(value + '/RainfallTrigger/la')
-        prevRainValue = value
-        if (val == "OFF") or (val == "off"):
-            return True, 'OFF', indicatorOffColor
-        elif (val == "ON") or (val == "on"):
-            return True, 'ON', indicatorOnColor
+def showRainIndicator(value, n, label):
+    if (value is not None):
+        latestVal = getLatestData(value, "RainfallTrigger")
+        indicator = True
+        indicatorColor = indicatorOffColor
+        if latestVal in ['OFF', 'off', 'Off']:
+            newLabel = 'OFF'
+        elif latestVal in ['ON', 'on', 'On']:
+            newLabel = 'ON'
+            indicatorColor = indicatorOnColor
         else:
-            return False, '', indicatorOffColor
-    prevRainValue = value
+            indicator = False
+            newLabel = ''
+        if (label != newLabel): 
+            return indicator, newLabel, indicatorColor
+        return dash.no_update, dash.no_update, dash.no_update
     return False, '', indicatorOffColor
 
 #############################
@@ -1038,92 +943,54 @@ def showRainIndicator(value, n, indicator):
 @app.callback( 
     Output('ddMenuSensor', 'options'),
     [Input('clkDevC', 'n_intervals')],
-    [Input('ddMenuSensor', 'options')]
+    [Input('ddMenuSensor', 'options')],
+    prevent_initial_call = True
 )   
 def updateCSensorList(n, ddMenu):
-    trigger = dash.callback_context
-    triggerID = trigger.triggered[0]['prop_id'].split('.')[0]
-    if triggerID == 'clkDevC':
-        global newSensorBuffer
-        global rmSensorBuffer
-
-        if (newSensorBuffer == []) and (rmSensorBuffer == []):
-            return dash.no_update
+    global sensors
+    newOptions = []
+    for sensor in sensors:
+        newOptions.append(sensor['url'])
         
-        newDevices = []
-        newDevRn = []
-        rmDevices = []
-        rmDevRn = []
-
-        for device in newSensorBuffer:
-            option = {"label": device, "value": "cse-in/"+device}
-            if (option not in ddMenu) and (device not in rmSensorBuffer):
-                newDevices.append(option)
-                newDevRn.append(device)
-                newSensorBuffer.remove(device)
-
-        for device in rmSensorBuffer:
-            option = {"label": device, "value": "cse-in/"+device}
-            if (option in ddMenu) and (device not in newDevices):
-                rmDevices.append(option)
-                rmDevRn.append(device)
-                rmSensorBuffer.remove(device)
-
+    oldOptions = []
+    for sensor in ddMenu:
+        oldOptions.append(sensor['value'])
         
-        if (newDevices == []) and (rmDevices == []):
-            return dash.no_update
+    newOptions.sort()
+    oldOptions.sort()
 
-        for option in ddMenu:
-            if option not in rmDevices:
-                newDevices.append(option)
-        
-        return newDevices
+    if (newOptions != oldOptions):
+        options = []
+        for sensor in sensors:
+            options.append({'label': sensor['rn'], 'value': sensor['url']})
+        return options
     return dash.no_update
 
 #### Update Actuator Device List ####
 @app.callback( 
     Output('ddMenuActuator', 'options'),
     [Input('clkDevC', 'n_intervals')],
-    [Input('ddMenuActuator', 'options')]
+    [Input('ddMenuActuator', 'options')],
+    prevent_initial_call = True
 )   
 def updateActuatorList(n, ddMenu):
-    trigger = dash.callback_context
-    triggerID = trigger.triggered[0]['prop_id'].split('.')[0]
-    if triggerID == 'clkDevC':
-        global newActuatorBuffer
-        global rmActuatorBuffer
-
-        if (newActuatorBuffer == []) and (rmActuatorBuffer == []):
-            return dash.no_update
+    global actuators
+    newOptions = []
+    for actuator in actuators:
+        newOptions.append(actuator['url'])
         
-        newDevices = []
-        newDevRn = []
-        rmDevices = []
-        rmDevRn = []
-
-        for device in newActuatorBuffer:
-            option = {"label": device, "value": "cse-in/"+device}
-            if (option not in ddMenu) and (device not in rmActuatorBuffer):
-                newDevices.append(option)
-                newDevRn.append(device)
-                newActuatorBuffer.remove(device)
-
-        for device in rmActuatorBuffer:
-            option = {"label": device, "value": "cse-in/"+device}
-            if (option in ddMenu) and (device not in newDevices):
-                rmDevices.append(option)
-                rmDevRn.append(device)
-                rmActuatorBuffer.remove(device)
-
+    oldOptions = []
+    for actuator in ddMenu:
+        oldOptions.append(actuator['value'])
         
-        if (newDevices == []) and (rmDevices == []):
-            return dash.no_update
+    newOptions.sort()
+    oldOptions.sort()
 
-        for option in ddMenu:
-            if option not in rmDevices:
-                newDevices.append(option)
-        
-        return newDevices
+    if (newOptions != oldOptions):
+        options = []
+        for actuator in actuators:
+            options.append({'label': actuator['rn'], 'value': actuator['url']})
+        return options
     return dash.no_update
 
 #### Sensor Settings ####
@@ -1136,7 +1003,8 @@ def updateActuatorList(n, ddMenu):
     [Input('numAvg', 'value')],
     [Input('transmitP', 'value')],
     [Input('sampleP', 'value')],
-    [Input('settingsButton', 'n_clicks')]
+    [Input('settingsButton', 'n_clicks')],
+    prevent_initial_call = True
 )
 def settingsInput(value, numAvg, transmitP, sampleP, button):
     if ((button > 0) and (value is not None)):
@@ -1180,7 +1048,8 @@ def settingsInput(value, numAvg, transmitP, sampleP, button):
     Output('alertboxOff', 'hidden'),
     [Input('valveOn', 'n_clicks')],
     [Input('ddMenuActuator', 'value')],
-    [Input('manualOverride', 'on')]
+    [Input('manualOverride', 'on')],
+    prevent_initial_call = True
 )
 def actuatorOn(n, value, manualOverride):
     if (n > 0) and (value is not None) and (manualOverride):
@@ -1198,7 +1067,8 @@ def actuatorOn(n, value, manualOverride):
     Output('alertboxOn', 'hidden'),
     [Input('valveOff', 'n_clicks')],
     [Input('ddMenuActuator', 'value')],
-    [Input('manualOverride', 'on')]
+    [Input('manualOverride', 'on')],
+    prevent_initial_call = True
 )
 def actuatorOff(n, value, manualOverride):
     if (n > 0) and (value is not None) and (manualOverride):
@@ -1212,7 +1082,8 @@ def actuatorOff(n, value, manualOverride):
 @app.callback(
     Output('manualOverride', 'on'),
     [Input('manualOverride', 'on')],
-    [Input('ddMenuActuator', 'value')]
+    [Input('ddMenuActuator', 'value')],
+    prevent_initial_call = True
 )
 def manualOverrideC(manualOverride, value):
     trigger = dash.callback_context
@@ -1232,7 +1103,6 @@ def manualOverrideC(manualOverride, value):
         return False
     return dash.no_update
 
-
 #### Valve Status Update ####
 @app.callback(
     Output('valveStatus', 'value'),
@@ -1240,60 +1110,34 @@ def manualOverrideC(manualOverride, value):
     Output('valveStatus', 'color'),
     [Input('ddMenuActuator', 'value')],
     [Input('clkActStatus', 'n_intervals')],
-    [Input('valveStatus', 'value')],
+    [Input('valveStatus', 'label')],
+    prevent_initial_call = True
 )
-def showActuatorIndicator(value, n, indicator):
-    if ((value is not None)):
-
-        discovery = discover(type="Sub", location=value + "/actuatorState", rn="actSub")
-
-        if (discovery != []) and (indicator != False):
-            dates = []
-            vals = []
-            global newCINActuatorBuffer
-            for item in newCINActuatorBuffer:
-                if (item[0] == value + "/actuatorState"):
-                    date = item[2]
-                    if (item[1] != ""):
-                        vals.append(item[1])
-                        dates.append(date[0:4] + "-" + date[4:6] + "-" + date[6:11] + ":" + date[11:13] + ":" + date[13:15])
-                    newCINActuatorBuffer.remove(item)
-
-            if (vals != []) and (dates != []):
-                newestVal = vals[dates.index(max(dates))]
-                if (newestVal == "O"):
-                    return True, 'OFF', indicatorOffColor
-                elif (newestVal == "1"):
-                    return True, 'ON', indicatorOnColor
-                else:
-                    return False, '', indicatorOffColor
-
-            return dash.no_update, dash.no_update, dash.no_update
-        if (discovery == []):
-            discovery = discover(type="Container", location=value, rn="actuatorState")
-
-            if discovery != []:
-                subRI = createSubscription("actSub", value + "/actuatorState", [3])
-
-        actVal, actDate = requestVal(value + '/actuatorState/la')
-
-        if (actVal == "0"):
-            return True, 'OFF', indicatorOffColor
-        elif (actVal == "1"):
-            return True, 'ON', indicatorOnColor
+def showActuatorIndicator(value, n, label):
+    if (value is not None):
+        latestVal = getLatestData(value, "actuatorState", aeType="actuator")
+        indicator = True
+        indicatorColor = indicatorOffColor
+        if latestVal == "0":
+            newLabel = 'OFF'
+        elif latestVal == "1":
+            newLabel = 'ON'
+            indicatorColor = indicatorOnColor
         else:
-            return False, '', indicatorOffColor
+            indicator = False
+            newLabel = ''
+        if (label != newLabel):
+            return indicator, newLabel, indicatorColor
+        return dash.no_update, dash.no_update, dash.no_update
     return False, '', indicatorOffColor
 
 #### Link Devices ####
 @app.callback(
     Output('linkButton', 'n_clicks'),
-    Output('alertboxlink', 'children'),
-    Output('alertboxlink', 'style'),
-    Output('alertboxlink', 'hidden'),
     [Input('linkButton', 'n_clicks')],
     [Input('ddMenuActuator', 'value')],
-    [Input('ddMenuSensor', 'value')]
+    [Input('ddMenuSensor', 'value')],
+    prevent_initial_call = True
 )
 def linkDev(n, aVal, sVal):
     if (n != 0) and (n != 7) and (n != 8) and (aVal is not None) and (sVal is not None):
@@ -1302,28 +1146,25 @@ def linkDev(n, aVal, sVal):
         aLbl = requestVal(aVal, resourceType="AE")
         sLbl = requestVal(sVal, resourceType="AE")
         if (aDevName in sLbl) and (sDevName in aLbl):
-            return 7, ["Devices are already linked!"], alertStyle, False
+            return 7
         if (aDevName not in sLbl):
             sLbl.append(aDevName)
             updateLabel(sVal, sLbl)
         if (sDevName not in aLbl):
             aLbl.append(sDevName)
             updateLabel(aVal, aLbl)
-        return 8, ["Devices " + sDevName + " and " + aDevName + " have been linked!"], alertStyle, False
+        return 8
     elif (n > 0) and (aVal is not None) and (sVal is not None):
-        return dash.no_update, dash.no_update, dash.no_update, dash.no_update
-    return 0, [], alertStyleHidden, True
-
+        return dash.no_update
+    return 0
 
 #### Unlink Devices ####
 @app.callback(
     Output('unlinkButton', 'n_clicks'),
-    Output('alertboxunlink', 'children'),
-    Output('alertboxunlink', 'style'),
-    Output('alertboxunlink', 'hidden'),
     [Input('unlinkButton', 'n_clicks')],
     [Input('ddMenuActuator', 'value')],
-    [Input('ddMenuSensor', 'value')]
+    [Input('ddMenuSensor', 'value')],
+    prevent_initial_call = True
 )
 def unlinkDev(n, aVal, sVal):
     if (n != 0) and (n != 7) and (n != 8) and (aVal is not None) and (sVal is not None):
@@ -1332,17 +1173,17 @@ def unlinkDev(n, aVal, sVal):
         aLbl = requestVal(aVal, resourceType="AE")
         sLbl = requestVal(sVal, resourceType="AE")
         if (aDevName not in sLbl) and (sDevName not in aLbl):
-            return 7, ["Devices were not previously linked."], alertStyle, False
+            return 7
         if (aDevName in sLbl):
             sLbl.remove(aDevName)
             updateLabel(sVal, sLbl)
         if (sDevName in aLbl):
             aLbl.remove(sDevName)
             updateLabel(aVal, aLbl)
-        return 8, ["Devices " + sDevName + " and " + aDevName + " have been unlinked!"], alertStyle, False
+        return 8
     elif (n > 0) and (aVal is not None) and (sVal is not None):
-        return dash.no_update, dash.no_update, dash.no_update, dash.no_update
-    return 0, [], alertStyleHidden, True
+        return dash.no_update
+    return 0
 
 #### Display Sensor Linked Devices ####
 @app.callback(
@@ -1352,6 +1193,7 @@ def unlinkDev(n, aVal, sVal):
     [Input('ddMenuSensor', 'value')],
     [Input('linkButton', 'n_clicks')],
     [Input('unlinkButton', 'n_clicks')],
+    prevent_initial_call = True
 )
 def displaySenLinked(value, linkButton, unlinkButton):
     trigger = dash.callback_context
@@ -1377,6 +1219,7 @@ def displaySenLinked(value, linkButton, unlinkButton):
     [Input('ddMenuActuator', 'value')],
     [Input('linkButton', 'n_clicks')],
     [Input('unlinkButton', 'n_clicks')],
+    prevent_initial_call = True
 )
 def displayActLinked(value, linkButton, unlinkButton):
     trigger = dash.callback_context
@@ -1393,6 +1236,50 @@ def displayActLinked(value, linkButton, unlinkButton):
     if (value is None):
         return [], alertStyleHidden, True
     return dash.no_update, dash.no_update, dash.no_update
+
+#### Sensor Battery Level ####
+@app.callback(
+    Output('sBattery', 'value'),
+    Output('sBattery', 'label'),
+    [Input('ddMenuSensor', 'value')],
+    [Input('clkDevC', 'n_intervals')],
+    [Input('sBattery', 'label')],
+    prevent_initial_call = True
+)
+def showSensorBatteryLevel(value, n, batteryLevel):
+    if (value is not None):
+        battery = getLatestData(value, "Battery")
+        if (battery == ''):
+            return None, ""
+        latestVal = str(round(float(battery), 2))
+        if (batteryLevel != (latestVal + "%")):
+            return float(latestVal), (latestVal + "%")
+        return dash.no_update, dash.no_update
+    return None, ""
+
+#### Actuator Battery Level ####
+@app.callback(
+    Output('aBattery', 'value'),
+    Output('aBattery', 'label'),
+    [Input('ddMenuActuator', 'value')],
+    [Input('clkDevC', 'n_intervals')],
+    [Input('aBattery', 'label')],
+    prevent_initial_call = True
+)
+def showActuatorBatteryLevel(value, n, batteryLevel):
+    if (value is not None):
+        battery = getLatestData(value, "Battery", "actuator")
+        if (battery == ''):
+            return None, ""
+        latestVal = str(round(float(battery), 2))
+        if (batteryLevel != (latestVal + "%")):
+            return float(latestVal), (latestVal + "%")
+        return dash.no_update, dash.no_update
+    return None, ""
+
+########################
+#   oneM2M Functions   #
+########################
 
 #### Parse oneM2M response outputs ####
 def getResId(tag,r):
@@ -1412,6 +1299,7 @@ def getCon(tag,r):
 def getCt(tag, r):
     try:
         ct = r.json()[tag]['ct']
+        ct = formatDate(ct)
     except:
         ct = ""
     return ct
@@ -1424,7 +1312,6 @@ def getDis(tag, r):
     return list
 
 def getCONs(tag, r):
-    # Generate a list of contents and corresponding cts from input response
     outputCONs = []
     outputDates = []    
     try:
@@ -1433,12 +1320,12 @@ def getCONs(tag, r):
             try:
                 outputCONs.append(float(element["con"]))
                 date = element["ct"]
-                outputDates.append(date[0:4] + "-" + date[4:6] + "-" + date[6:11] + ":" + date[11:13] + ":" + date[13:15])
+                outputDates.append(date)
             except:
                 pass
     except:
         pass
-    return outputCONs, outputDates
+    return outputCONs, formatDate(outputDates)
 
 def getlbl(tag, r):
     try:
@@ -1523,7 +1410,7 @@ def updateLabel(addr, lbl):
     hdrs = {'X-M2M-RVI':'2a','X-M2M-RI':'CAE_Test','X-M2M-Origin':originator, 'Accept':'application/json', 'Content-Type':'application/json'}
     r = requests.put(url, data=dumps(payld), headers=hdrs)
 
-def discover(type="", label="", location=cseID, rn=""):
+def discover(type="", label="", location=cseID, rn="", lvl=""):
     if (type == "AE"):
         ty = "&ty=2"
     elif (type == "Container"):
@@ -1541,12 +1428,13 @@ def discover(type="", label="", location=cseID, rn=""):
         label = "&lbl=" + label
     if (rn != ""):
         rn = "&rn=" + rn
+    if (lvl != ""):
+        lvl = "&lvl=" + lvl
 
-    url = 'http://' + cseIP + ':' + csePort + '/' + location + '?fu=1' + ty + label + rn
+    url = 'http://' + cseIP + ':' + csePort + '/' + location + '?fu=1' + ty + label + rn + lvl
     hdrs = {'X-M2M-RVI':'2a','X-M2M-RI':"CAE_Test",'X-M2M-Origin':originator, 'Accept':"application/json"}
     r = requests.get(url, headers=hdrs)
     return getDis('m2m:uril',r)
-
 
 def createSubscription(resourceName, parentID, net, origin=originator):
     payld = { "m2m:sub": { "rn": resourceName, "enc": {"net":net}, "nu":[originator]} }
@@ -1569,27 +1457,178 @@ def createContentInstance(content, parentID):
     print ("CIN Create Response")
     print (r.text)
 
-def removefromAELabel(addr, removeList):
-    lbl = requestVal(addr, resourceType="AE")
-    for element in removeList:
-        if (element in lbl):
-            lbl.remove(element)
-    updateLabel(addr, lbl)
 
-def addtoAELabel(addr, addList):
-    lbl = requestVal(addr, resourceType="AE")
-    for element in addList:
-        if (element not in lbl):
-            lbl.append(element)
-    updateLabel(addr, lbl)
+##########################
+#     Functions to       #
+#   manage sensor and    #
+#  actuator data values  #
+##########################
 
-#### Notifications ####
+#### Fromat Dates to fit expected graph formatting and ET timezone ####
+def formatDate(ct):
+    if (isinstance(ct, str)):
+        return adjustTimeZone([ct[0:4] + "-" + ct[4:6] + "-" + ct[6:11] + ":" + ct[11:13] + ":" + ct[13:15]])[0]
+    return adjustTimeZone([date[0:4] + "-" + date[4:6] + "-" + date[6:11] + ":" + date[11:13] + ":" + date[13:15] for date in ct])
+    
+def adjustTimeZone(dates):
+    dates = pd.to_datetime(dates)
+    dates = dates.tz_localize('UTC').tz_convert('US/Eastern')
+    return [x.strftime("%Y-%m-%dT%H:%M:%S") for x in dates]
+
+#### Convert temperatures to Fahrenheit ####
+def convertToFahrenheit(tempC):
+    return [(((9/5) * temp) + 32) for temp in tempC]
+
+#### Obtain Sensor Data Values from CSE #### 
+def obtainSensorData(url):
+    global sensors
+    sensorName = url.split("/")[-1]
+    sensorDict = {'url': url, 'rn': sensorName, 'cnt': []}
+    discoverContainers = discover(type="Container", location=url)
+    for cnt in discoverContainers:
+        cntName = cnt.split("/")[-1]
+        if (cntName in ["Temperature", "SoilMoisture", "Humidity", "RainfallTrigger", "Battery", "GPS"]):
+            if (cntName in ["RainfallTrigger", "Battery", "GPS"]):
+                latestVal, latestDate = requestVal(cnt + "/la")
+                sensorDict['cnt'].append({'rn': cntName, 'cin': latestVal, 'ct': latestDate})
+            else:                        
+                values, dates = requestAllCIN(cnt)
+                if (cntName == "Temperature"):
+                    values = convertToFahrenheit(values)
+                if (len(values) > 1):
+                    # Sort data based on dates (ascending order - i.e. latest is last)
+                    sorted_lists = sorted(zip(dates, values))
+                    dates, values = [list(tuple) for tuple in zip(*sorted_lists)]
+                sensorDict['cnt'].append({'rn': cntName, 'cin': values, 'ct': dates})
+
+            subCheck = discover(type = "23", location = cnt, rn = cntName + "Sub")
+            if (subCheck == []):
+                createSubscription(cntName + "Sub", cnt, [3])
+
+    sensors.append(sensorDict)
+
+#### Obtain Sensor Data Values from CSE #### 
+def obtainActuatorData(url):
+    global actuators
+    actuatorName = url.split("/")[-1]
+    actuatorDict = {'url': url, 'rn': actuatorName,'cnt': []}
+    discoverContainers = discover(type="Container", location=url)
+    for cnt in discoverContainers:
+        cntName = cnt.split("/")[-1]
+        if (cntName == "actuatorState") or (cntName == "Battery"):
+            latestVal, latestDate = requestVal(cnt + "/la")
+            actuatorDict['cnt'].append({'rn': cntName, 'cin': latestVal, 'ct': latestDate})
+
+            subCheck = discover(type = "23", location = cnt, rn = cntName + "Sub")
+            if (subCheck == []):
+                createSubscription(cntName + "Sub",cnt, [3])
+
+    actuators.append(actuatorDict)
+
+#### Add newly recieved content instance  ####
+def addNewCIN(rn, cntName, ct, cin, aeType = "sensor"):
+
+    global sensors
+    global actuators
+
+    if (cntName in ["Temperature", "Humidity", "SoilMoisture"]) and (cin != ""):
+        cin = float(cin)
+    
+    if aeType == "actuator":
+        actIndex, cntIndex = None, None
+        for actuator in actuators:
+            if actuator['rn'] == rn:
+                actIndex = actuators.index(actuator)
+                for cnt in actuator['cnt']:
+                    if cnt['rn'] == cntName:
+                        cntIndex = actuator['cnt'].index(cnt)
+                        break
+                break
+
+        if (actIndex != None) and (cntIndex != None):
+            actuators[actIndex]['cnt'][cntIndex]['ct'] = ct
+            actuators[actIndex]['cnt'][cntIndex]['cin'] = cin
+    else:
+        sensorIndex, cntIndex = None, None
+        for sensor in sensors:
+            if sensor['rn'] == rn:
+                sensorIndex = sensors.index(sensor)
+                for cnt in sensor['cnt']:
+                    if cnt['rn'] == cntName:
+                        cntIndex = sensor['cnt'].index(cnt)
+                        break
+                break
+        if (sensorIndex != None) and (cntIndex != None): 
+            if cntName in ["RainfallTrigger", "Battery", "GPS"]:
+                sensors[sensorIndex]['cnt'][cntIndex]['ct'] = ct
+                sensors[sensorIndex]['cnt'][cntIndex]['cin'] = cin
+            else:
+                if (cntName == "Temperature") and (cin != ""):
+                    cin = convertToFahrenheit([cin])[0]
+                if (len(sensors[sensorIndex]['cnt'][cntIndex]['ct']) >= 50):
+                    sensors[sensorIndex]['cnt'][cntIndex]['ct'] = sensors[sensorIndex]['cnt'][cntIndex]['ct'][-49:]
+                    sensors[sensorIndex]['cnt'][cntIndex]['cin'] = sensors[sensorIndex]['cnt'][cntIndex]['cin'][-49:]
+                sensors[sensorIndex]['cnt'][cntIndex]['ct'].append(ct)
+                sensors[sensorIndex]['cnt'][cntIndex]['cin'].append(cin)
+
+# Find all data to graph: only used for Temperature, Humidity, SoilMoisture containers
+def getAllData(url, cntName):
+    global sensors
+    for sensor in sensors:
+            if sensor['url'] == url:
+                for cnt in sensor['cnt']:
+                    if cnt['rn'] == cntName:
+                            return cnt['cin'], cnt['ct']
+    return [], []
+
+# Find latest data: only used for Battery, RainFallTrigger, GPS, actuatorState containers
+def getLatestData(url, cntName, aeType="sensor"):
+    global sensors
+    global actuators
+    if aeType == "actuator":
+        for actuator in actuators:
+            if actuator['url'] == url:
+                for cnt in actuator['cnt']:
+                    if cnt['rn'] == cntName:
+                        if cnt['cin'] != []:
+                            return cnt["cin"]
+    else:
+        for sensor in sensors:
+            if sensor['url'] == url:
+                for cnt in sensor['cnt']:
+                    if cnt['rn'] == cntName:
+                        if cnt['cin'] != []:
+                            return cnt["cin"]
+    return ""
+
+# Get all the currently registered AEs and the CINs of their CNTs (used at startup)
+def obtainAllAEs():
+
+    discoverSensors = discover(type="AE", label="sensor")
+    for sensor in discoverSensors:
+        obtainSensorData(sensor)
+
+    discoverActuators = discover(type="AE", label="actuator")
+    for actuator in discoverActuators:
+        obtainActuatorData(actuator)
+
+##########################
+#                        #
+#   Background Threads   #
+#                        #
+##########################
+
+#### Notifications/HTTP Handler Thread ####
+
+# HTTP Handler
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler): 
 
     def do_POST(self) -> None:
-        global newCINSensorBuffer
-        global newCINActuatorBuffer
+        global sensors
+        global actuators
+
         # Construct return header
+        # ACME CSE requires rsc value of 2000 returned
         mySendResponse(self, 200, '2000')
 
         # Get headers and content data
@@ -1612,23 +1651,30 @@ class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
             rn = r['m2m:sgn']['nev']['rep']['m2m:ae']['rn']
         except:
             rn = ""
-        # Append to appropriate "buffer" if its an AE
+        # If its an AE handle cases that add/remove
         if (rn != ""):
             try:
                 lbl = r['m2m:sgn']['nev']['rep']['m2m:ae']['lbl']
             except:
                 lbl = []
             if "sensor" in lbl:
-                if (net == 3) and (rn not in newSensorBuffer):
-                    newSensorBuffer.append(rn)
-                elif (net == 4) and (rn not in rmSensorBuffer):
-                    rmSensorBuffer.append(rn)
+                if (net == 3):
+                    # add to sensor list to subscribe to its containers
+                    newSensorList.append("cse-in/"+rn)
+                elif (net == 4):
+                    for sensor in sensors:
+                        if (sensor['rn'] == rn):
+                            sensors.remove(sensor)
+                            break
             elif "actuator" in lbl:
-                if (net == 3) and (rn not in newActuatorBuffer):
-                    newActuatorBuffer.append(rn)
-                elif (net == 4) and (rn not in rmActuatorBuffer):
-                    rmActuatorBuffer.append(rn)
-
+                if (net == 3):
+                    # add to actuator list to subscribe to its containers
+                    newActuatorList.append("cse-in/"+rn)
+                elif (net == 4):
+                    for actuator in actuators:
+                        if (actuator['rn'] == rn):
+                            actuators.remove(actuator)
+                            break
         # If its not an AE, then its probably a content instance
         elif (rn == ""):
             try:
@@ -1643,11 +1689,21 @@ class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
                     lbl = []
 
                 if (lbl != []):
-                    url = 'cse-in/' + lbl[0]
                     ct = r['m2m:sgn']['nev']['rep']['m2m:cin']['ct']
-                    if lbl[0].split("/")[-1] == "actuatorState":
-                            newCINActuatorBuffer.append([url, con, ct])
-                    newCINSensorBuffer.append([url, con, ct])
+                    ct = formatDate(ct)
+                    lbl = lbl[0].split("/")
+                    if lbl[-1] == "Battery":
+                        label = requestVal("cse-in/" + lbl[0], resourceType="AE")
+                        if "sensor" in label:
+                            addNewCIN(lbl[0], lbl[-1], ct, con, aeType="sensor")
+                        elif "actuator" in label:
+                            addNewCIN(lbl[0], lbl[-1], ct, con, aeType="actuator")
+                    elif lbl[-1] == "actuatorState":
+                        addNewCIN(lbl[0], lbl[-1], ct, con, aeType="actuator")
+                    else:
+                        addNewCIN(lbl[0], lbl[-1], ct, con, aeType="sensor")
+
+        # Do nothing if its neither an AE or CIN -> its probably a sub creation notif or acp 
 
 # Send appropriate response for oneM2M ACME CSE
 def mySendResponse(self, responseCode, rsc):
@@ -1660,12 +1716,35 @@ def run_http_server():
     httpd = HTTPServer(('', appPort), SimpleHTTPRequestHandler)
     print('**starting server & waiting for connections**')
     httpd.serve_forever()
+            
+#### Thread to create subscriptions for newly registered devices ####
+def manage_cnt_subs():
+    global newSensorList
+    global newActuatorList
 
-#### Run app and http Server ####
+    while True:
+        for sensor in newSensorList:
+            # Wait for the AE to create all its containers
+            time.sleep(5)
+            # Subscribe to the desired containers
+            obtainSensorData(sensor)
+            newSensorList.remove(sensor)
+        
+        for actuator in newActuatorList:
+            # Wait for the AE to create all its containers
+            time.sleep(5)
+            # Subscribe to the desired containers
+            obtainActuatorData(actuator)
+            newActuatorList.remove(actuator)
+
+#### Run app and start background threads ####
 if __name__ == "__main__":
 
     # Start HTTP server to handle subscription notifications
     threading.Thread(target=run_http_server, daemon=True).start()
+
+    # Start thread to subscribe to newly connected AEs
+    threading.Thread(target=manage_cnt_subs, daemon=True).start()
 
     # Verify that AE, ACP are created
     discoverAE = discover(type="AE", rn = appName)
@@ -1684,5 +1763,8 @@ if __name__ == "__main__":
     if (discoverSUB == []):
         subID = createSubscription("deviceSub", cseID, [3, 4])    
 
+    # Obtain all current sensors, actuators and their CNTs/CINs
+    obtainAllAEs()
+    
     # Run dashboard app
     app.run_server(debug=False, host = ip,  port=8050, use_reloader=False)
