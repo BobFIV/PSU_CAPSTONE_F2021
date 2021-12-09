@@ -31,7 +31,7 @@ LOG_MODULE_REGISTER(net_http_client_sample, LOG_LEVEL_INF);
 // length of HTTP respones buffer
 #define MAX_RECV_BUF_LEN 1024
 // HTTP server address to connect to
-#define SERVER_ADDR4 "3.231.72.34"
+#define SERVER_ADDR4 "DEFINE THIS"
 // Variable to know if Thingy:91 is being used
 // Set to false if using the nrf9160dk
 #define Thingy91 true
@@ -1102,17 +1102,7 @@ void main(void)
 		return;
 	}
 	printk("initialization successful\n");
-
-	/*int err = adp536x_init(ADP536X_I2C_DEV_NAME);
-	if (err < 0)
-	{
-		printk("err: %d", err);
-	}*/
-	// err = adp536x_buck_1v8_set();
-	// k_sleep(K_MSEC(5000));
-	// printk("successful adp536 initiation\n\n\n\n");
-
-	/* Setting up the main application entity as well as containers for sensor values*/
+	/* Setting up the main application entity as well as containers for actuator values*/
     printk("%s\n\n", deviceName);
 	char *temp = retrieveAE(deviceName);
 	char aeRI[20];
@@ -1170,22 +1160,13 @@ void main(void)
 	printk("%s", actCNT);
 	printk("Battery: %s", cntBat);
 	err = createCIN(actCNT, 0, lbl);
-	// int pchInt = retrievePCH(deviceName);
-	// printk("retrievedVal = %d",pchInt);
 	while (true)
 	{
 		printk("\n\n\n\nRetrieving CIN \n\n\n\n\n\n");
 		int testCalc = retrievePCH(deviceName);
 		printk("Returned testCalc: %d\n", testCalc);
-		// double Num2 = retrieveCIN("addNumInput", "Number2");
-		// printk("Returned Num2 for Addition: %f", Num2);
-		// Num1 += Num2;
-		// printk("Here");
-		// testCalc = testCalc / 10
 		int valveState = testCalc % 10;
 		printk("ValveState is: %d\n", valveState);
-		// testCalc = testCalc * 10;
-		// testCalc += valveState;
 		printk("New Actuator state is: %d\n", testCalc);
 		if (valveState == 1)
 		{
@@ -1209,103 +1190,5 @@ void main(void)
 		{
 			printk("error with Temp CIN: %d", err);
 		}
-		/*
-			int ret;
-			char battery[32] = {0};
-			char *bat;
-			ret = at_cmd_write("AT%XVBAT", battery, sizeof(battery), NULL);
-			if (ret != 0) {
-				printk("failed to read battery %d\n", ret);
-			} else {
-				bat = strstr(battery, " ");
-				bat++;
-				int batteryRaw = atoi(bat);
-				float batPercent = batteryRaw/4500.0*100;
-				printk("Battery Percentage: %f%%\n", batPercent);
-
-				char batString[12];
-				sprintf(batString, "%f", batPercent);
-				char batLabel[50] = deviceName;
-				strcat(batLabel, "/Info/Battery");
-				err = createCIN(cntBat, batString, batLabel);
-				if (err != 0) {
-					printk("error with Battery CIN: %d\n", err);
-					break;
-				}
-			}
-		*/
-		// int timeToWait = retrieveCIN(deviceName, "waitPeriod");
 	}
-	// while (true)
-	//{
-	//	printk("All done");
-	//	k_sleep(K_MSEC(3000));
-	// }
-	//  retrieve the actuator input
-	//  through discovery function check for AE
-	//  if it exists we are good to discover CIN
-
-	// temp = retrieveCNT("Temperature");
-	// char cntTemp[30];
-	// char acpString[20] = deviceName;
-	// char acpiCNT[40];
-	// char temp3[5] = "ACP";
-	// strcat(acpString, temp3);
-
-	// if (strcmp(temp, "") == 0) {
-	// 	char* temp4 = createACP(aeRI, acpString);
-	// 	printk("acpi for CNT: %s\n", temp4);
-	// 	strcpy(acpiCNT, temp4);
-	// 	printk("acpi for CNT: %s\n", acpiCNT);
-	// 	temp = createCNT("Temperature", aeRI, 10, acpiCNT);
-	// 	strcpy(cntTemp, temp);
-	// } else {
-	// 	strcpy(cntTemp, temp);
-	// }
-	// char cntHum[30];
-	// temp = retrieveCNT("Humidity");
-	// if (strcmp(temp, "") == 0) {
-	// 	printk("%s", acpiCNT);
-	// 	printk("aeRI %s acpiCNT %s", aeRI, acpiCNT);
-	// 	temp = createCNT("Humidity", aeRI, 10, acpiCNT);
-	// 	strcpy(cntHum, temp);
-	// } else {
-	// 	strcpy(cntHum, temp);
-	// }
-
-	// char cntGPS[30];
-	// temp = retrieveCNT("GPS");
-	// if (strcmp(temp, "") == 0) {
-	// 	printk("aeRI %s acpiCNT %s", aeRI, acpiCNT);
-	// 	temp = createCNT("GPS", aeRI, 10, acpiCNT);
-	// 	strcpy(cntGPS, temp);
-	// } else {
-	// 	strcpy(cntGPS, temp);
-	// }
-
-	// /* Start sending temp/hum sensor values, main loop of program
-	//    */
-	// printk("\noneM2M initialization complete, sending sensor values \n\n");
-	// while (true) {
-	// 	/* This portion is sensor values, so only want to use this if Thingy:91 is in use */
-	// 	if (Thingy91) {
-	// 		double temp; double hum;
-	// 		environmental_data_get(&temp, &hum);
-	// 		printk("\ntemp: %lf hum %lf\n", temp, hum);
-	// 		int err;
-	// 		err = createCIN(cntTemp, temp);
-	// 		if (err != 0) {
-	// 			printk("error with Temp CIN: %d", err);
-	// 			break;
-	// 		}
-	// 		err = createCIN(cntHum, hum);
-	// 		if (err != 0) {
-	// 			printk("error with Hum CIN: %d", err);
-	// 			break;
-	// 		}
-	// 	}
-
-	// 	k_sleep(K_MSEC(5000));
-	// }
-	// printk("\nEND OF PROGRAM\n");
 }
