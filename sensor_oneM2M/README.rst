@@ -17,7 +17,7 @@ The sample supports the following development kit:
 
 .. table-from-rows:: /includes/sample_board_rows.txt
    :header: heading
-   :rows: nrf9160dk_nrf9160_ns
+   :rows: thingy91_nrf9160_ns
 
 .. include:: /includes/spm.txt
 
@@ -32,7 +32,7 @@ It then connects to the cloud CSE pointed to by the addr and port configuration 
 Then the program enters a loop of:
    Retrieving latest user settings from the Settings CNT
    Reading the Temperature, SoilMoisture, and Humidity sensors averaging according to settings, with times between sensor reads defined by Settings
-   Reads latest GPS and Rainfall Trigger data
+   Reads latest GPS and Rainfall Trigger data, and battery percentage
    Sends all of these values as CINs to the cloud CSE
    Time between transmissions to the cloud CSE is defined in Settings
    
