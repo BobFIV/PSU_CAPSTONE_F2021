@@ -7,6 +7,12 @@
 # Inspired by the Dash Plotly example dashboard:
 # https://github.com/plotly/dash-sample-apps/tree/main/apps/dash-manufacture-spc-dashboard
 #
+# Reference the dash documentation (https://dash.plotly.com/) 
+# to learn about how the layout and callbacks work
+#
+# Note: Default app layout looks best on a 24" 1080p screen browser on fullscreen mode
+# or a browser on a smartphone device
+#
 
 import logging
 import dash
@@ -1581,7 +1587,7 @@ def getAllData(url, cntName):
                             return cnt['cin'], cnt['ct']
     return [], []
 
-# Find latest data: only used for Battery, RainFallTrigger, GPS, actuatorState containers
+# Find latest data: only used for Battery, RainfallTrigger, GPS, actuatorState containers
 def getLatestData(url, cntName, aeType="sensor"):
     global sensors
     global actuators
@@ -1620,7 +1626,7 @@ def obtainAllAEs():
 
 #### Notifications/HTTP Handler Thread ####
 
-# HTTP Handler
+# HTTP Request Handler
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler): 
 
     def do_POST(self) -> None:
@@ -1718,6 +1724,9 @@ def run_http_server():
     httpd.serve_forever()
             
 #### Thread to create subscriptions for newly registered devices ####
+# Containers for an AE won't be created till a response is generated.
+# Thus, we have to manage subs after responding to an AE and waiting 
+# a while (by sleeping) for the AE to create its containers.
 def manage_cnt_subs():
     global newSensorList
     global newActuatorList
